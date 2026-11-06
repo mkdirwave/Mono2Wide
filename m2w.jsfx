@@ -1,0 +1,308 @@
+desc: Mono2Wide (m2w Pseudo-Stereo Expander v2.1)
+author: mkdirwave
+version: 2.0
+
+// Скрываем стандартные ползунки REAPER
+slider1:50<0,100,1>-Pitch Detune (%)
+slider2:50<0,100,1>-Haas Delay (%)
+slider3:0<-6,6,0.1>-Center Level (dB)
+slider4:-3<-12,6,0.1>-Side Level (dB)
+slider5:0<0,1,1>-Mono Check (0=Off, 1=On)
+
+options:gfx_wnd_w=470 options:gfx_wnd_h=230
+
+@init
+MAX_BUF_SIZE = 16384;
+delay_buffer_L = 0;
+delay_buffer_R = delay_buffer_L + MAX_BUF_SIZE;
+
+write_ptr = 0;
+lfo_phase_L = 0;
+lfo_phase_R = $pi * 0.5; 
+
+active_knob = 0; 
+last_mouse_y = 0;
+
+// Переменные для отслеживания двойного клика
+last_click_time = 0;
+last_click_knob = 0;
+
+function _update_audio_params() (
+  cents = (slider1 / 100) * 7;
+  lfo_freq = 0.8; 
+  lfo_inc = (2 * $pi * lfo_freq) / srate;
+  mod_depth = (cents / 1200) * srate * 0.005; 
+
+  base_delay_samples = (20 / 1000) * srate;
+  haas_total_samples = (slider2 / 100) * 30 * srate / 1000;
+
+  vol_C = 10 ^ (slider3 / 20);
+  vol_S = 10 ^ (slider4 / 20);
+  wet_mix = (slider1 > 0 || slider2 > 0) ? 1.0 : 0.0;
+  is_mono = slider5; 
+);
+
+@slider
+_update_audio_params();
+
+@block
+
+@sample
+mono_in = (spl0 + spl1) * 0.5;
+
+delay_buffer_L[write_ptr] = mono_in;
+delay_buffer_R[write_ptr] = mono_in;
+
+lfo_phase_L += lfo_inc;
+lfo_phase_L > 2 * $pi ? lfo_phase_L -= 2 * $pi;
+lfo_phase_R += lfo_inc;
+lfo_phase_R > 2 * $pi ? lfo_phase_R -= 2 * $pi;
+
+pitch_mod_L = sin(lfo_phase_L) * mod_depth;
+pitch_mod_R = cos(lfo_phase_R) * mod_depth; 
+
+delay_L = base_delay_samples + (haas_total_samples * 0.5) + pitch_mod_L;
+delay_R = base_delay_samples - (haas_total_samples * 0.5) + pitch_mod_R;
+
+read_ptr_L = write_ptr - delay_L;
+read_ptr_R = write_ptr - delay_R;
+
+r_idx_L = read_ptr_L | 0;
+frac_L = read_ptr_L - r_idx_L;
+r_idx_L < 0 ? r_idx_L += MAX_BUF_SIZE;
+next_idx_L = (r_idx_L + 1) % MAX_BUF_SIZE;
+
+r_idx_R = read_ptr_R | 0;
+frac_R = read_ptr_R - r_idx_R;
+r_idx_R < 0 ? r_idx_R += MAX_BUF_SIZE;
+next_idx_R = (r_idx_R + 1) % MAX_BUF_SIZE;
+
+side_L = delay_buffer_L[r_idx_L] * (1 - frac_L) + delay_buffer_L[next_idx_L] * frac_L;
+side_R = delay_buffer_R[r_idx_R] * (1 - frac_R) + delay_buffer_R[next_idx_R] * frac_R;
+
+write_ptr += 1;
+write_ptr >= MAX_BUF_SIZE ? write_ptr = 0;
+
+s_mix = is_mono ? 0.0 : (vol_S * wet_mix);
+
+out_L = (mono_in * vol_C) + (side_L * s_mix);
+out_R = (mono_in * vol_C) - (side_R * s_mix);
+
+spl0 = out_L;
+spl1 = out_R;
+
+@gfx 470 230
+// ---- РИСОВАНИЕ ИНТЕРФЕЙСА ----
+gfx_r = 0.94; gfx_g = 0.95; gfx_b = 0.96; gfx_a = 1.0;
+gfx_rect(0, 0, gfx_w, gfx_h);
+
+// Верхняя декоративная плашка
+gfx_r = 0.88; gfx_g = 0.90; gfx_b = 0.92;
+gfx_rect(0, 0, 470, 38);
+
+// ---- ТРЕХЦВЕТНЫЙ ЛОГОТИП ----
+gfx_setfont(1, "Helvetica", 15, 98); 
+gfx_r = 0.15; gfx_g = 0.18; gfx_b = 0.22; gfx_x = 16; gfx_y = 12; gfx_drawstr("MONO");
+gfx_r = 0.0; gfx_g = 0.55; gfx_b = 0.9; gfx_drawstr("2");
+gfx_r = 0.05; gfx_g = 0.65; gfx_b = 0.65; gfx_drawstr("WIDE");
+
+want_hand_cursor = 0;
+
+// ---- ОБЩАЯ РАМКА ШАССИ ----
+ch_x = 12; ch_y = 50; ch_w = 446; ch_h = 152;
+gfx_r = 0.74; gfx_g = 0.76; gfx_b = 0.80;
+gfx_rect(ch_x, ch_y, ch_w, ch_h, 0); 
+
+pad = 7; 
+k_y = ch_y + (ch_h * 0.5); 
+
+k1_x = ch_x + pad + 47;               
+k2_x = k1_x + 94 + pad;               
+k3_x = k2_x + 94 + pad;               
+k4_x = k3_x + 94 + pad;               
+k_rad = 21;
+
+sw_w = 28; sw_h = 40; sw_x = k4_x + 47 + pad; sw_y = k_y - 28; 
+
+mouse_x >= sw_x && mouse_x <= sw_x + sw_w && mouse_y >= sw_y && mouse_y <= sw_y + sw_h + 20 ? want_hand_cursor = 1;
+
+// ---- КНОПКА ПИТАНИЯ ----
+gfx_r = 0.12; gfx_g = 0.14; gfx_b = 0.16;
+gfx_rect(sw_x, sw_y, sw_w, sw_h);
+gfx_r = 0.78; gfx_g = 0.80; gfx_b = 0.84;
+gfx_rect(sw_x - 1, sw_y - 1, sw_w + 2, sw_h + 2, 0);
+
+slider5 ? (
+  gfx_r = 0.22; gfx_g = 0.24; gfx_b = 0.28;
+  gfx_rect(sw_x + 2, sw_y + 2, sw_w - 4, (sw_h - 4) * 0.5);
+  gfx_r = 0.08; gfx_g = 0.09; gfx_b = 0.11;
+  gfx_rect(sw_x + 2, sw_y + 2 + (sw_h - 4) * 0.5, sw_w - 4, (sw_h - 4) * 0.5);
+
+  gfx_setfont(1, "Arial", 11, 98);
+  gfx_r = 0.05; gfx_g = 0.65; gfx_b = 0.65; gfx_a = 0.3;
+  gfx_x = sw_x + 11; gfx_y = sw_y + 4; gfx_drawstr("I");
+  gfx_x = sw_x + 13; gfx_y = sw_y + 4; gfx_drawstr("I");
+  gfx_r = 0.1; gfx_g = 0.85; gfx_b = 1.0; gfx_a = 1.0;
+  gfx_x = sw_x + 12; gfx_y = sw_y + 4; gfx_drawstr("I");
+
+  gfx_r = 0.35; gfx_g = 0.38; gfx_b = 0.42;
+  gfx_x = sw_x + 10; gfx_y = sw_y + 23; gfx_drawstr("O");
+) : (
+  gfx_r = 0.08; gfx_g = 0.09; gfx_b = 0.11;
+  gfx_rect(sw_x + 2, sw_y + 2, sw_w - 4, (sw_h - 4) * 0.5);
+  gfx_r = 0.22; gfx_g = 0.24; gfx_b = 0.28;
+  gfx_rect(sw_x + 2, sw_y + 2 + (sw_h - 4) * 0.5, sw_w - 4, (sw_h - 4) * 0.5);
+
+  gfx_setfont(1, "Arial", 11, 98);
+  gfx_r = 0.35; gfx_g = 0.38; gfx_b = 0.42;
+  gfx_x = sw_x + 12; gfx_y = sw_y + 4; gfx_drawstr("I");
+
+  gfx_r = 0.90; gfx_g = 0.92; gfx_b = 0.95;
+  gfx_x = sw_x + 10; gfx_y = sw_y + 23; gfx_drawstr("O");
+);
+
+gfx_setfont(1, "Arial", 12, 98);
+gfx_r = 0.35; gfx_g = 0.4; gfx_b = 0.45;
+gfx_measurestr("MONO", mono_w, mono_h);
+gfx_x = sw_x + (sw_w - mono_w) * 0.5; gfx_y = sw_y + sw_h + 8;
+gfx_drawstr("MONO");
+
+// ---- ФУНКЦИЯ КНОБА ----
+function draw_knob(x, y, radius, value, min_val, max_val, label, unit_str) 
+(
+  f_w = 94; f_h = 136; f_x = x - f_w * 0.5; f_y = ch_y + 8; 
+  
+  gfx_r = 0.91; gfx_g = 0.92; gfx_b = 0.94; gfx_a = 1.0;
+  gfx_rect(f_x, f_y, f_w, f_h);
+  gfx_r = 0.78; gfx_g = 0.80; gfx_b = 0.84;
+  gfx_rect(f_x, f_y, f_w, f_h, 0);
+
+  gfx_r = 0.84; gfx_g = 0.86; gfx_b = 0.88;
+  gfx_circle(x, y, radius + 6, 0, 1);
+  gfx_r = 0.18; gfx_g = 0.20; gfx_b = 0.24;
+  gfx_circle(x, y, radius, 1, 1);
+  
+  norm_val = (value - min_val) / (max_val - min_val);
+  target_angle = -1.25 * $pi + norm_val * 1.5 * $pi;
+  
+  gfx_r = 0.05; gfx_g = 0.65; gfx_b = 0.65;
+  r_in = radius + 3; r_out = radius + 6; step = 0.02; i = -1.25 * $pi;
+  while(i < target_angle) (
+    next_i = min(i + step, target_angle);
+    gfx_triangle(x + cos(i)*r_in, y + sin(i)*r_in, x + cos(i)*r_out, y + sin(i)*r_out, x + cos(next_i)*r_out, y + sin(next_i)*r_out);
+    gfx_triangle(x + cos(i)*r_in, y + sin(i)*r_in, x + cos(next_i)*r_out, y + sin(next_i)*r_out, x + cos(next_i)*r_in, y + sin(next_i)*r_in);
+    i += step;
+  );
+
+  gfx_r = 0.95; gfx_g = 0.95; gfx_b = 0.95;
+  gfx_line(x + cos(target_angle)*4, y + sin(target_angle)*4, x + cos(target_angle) * (radius - 2), y + sin(target_angle) * (radius - 2), 1);
+
+  gfx_setfont(1, "Arial", 12, 98);
+  gfx_r = 0.35; gfx_g = 0.4; gfx_b = 0.45;
+  gfx_measurestr(label, lbl_w, lbl_h);
+  gfx_x = x - (lbl_w * 0.5); gfx_y = f_y + 10;
+  gfx_drawstr(label);
+  
+  disp_w = f_w - 14; disp_h = 24; disp_x = f_x + 7; disp_y = f_y + f_h - 34;
+  gfx_r = 0.05; gfx_g = 0.06; gfx_b = 0.08; gfx_a = 1.0;
+  gfx_rect(disp_x, disp_y, disp_w, disp_h);
+  gfx_r = 0.25; gfx_g = 0.28; gfx_b = 0.32;
+  gfx_rect(disp_x, disp_y, disp_w, disp_h, 0);
+
+  #val_only = "";
+  sprintf(#val_only, "%0.1f", value);
+  gfx_setfont(1, "Courier New", 13, 98);
+  gfx_measurestr(#val_only, v_w, v_h);
+  gfx_measurestr(unit_str, u_w, u_h);
+  total_val_w = v_w + u_w;
+  
+  text_start_x = disp_x + (disp_w - total_val_w) * 0.5;
+  text_start_y = disp_y + (disp_h - v_h) * 0.5;
+
+  gfx_r = 0.0; gfx_g = 0.6; gfx_b = 1.0; gfx_a = 0.25;
+  gfx_x = text_start_x - 1; gfx_y = text_start_y; gfx_drawstr(#val_only); gfx_drawstr(unit_str);
+  gfx_x = text_start_x + 1; gfx_y = text_start_y; gfx_drawstr(#val_only); gfx_drawstr(unit_str);
+  gfx_x = text_start_x; gfx_y = text_start_y - 1; gfx_drawstr(#val_only); gfx_drawstr(unit_str);
+  gfx_x = text_start_x; gfx_y = text_start_y + 1; gfx_drawstr(#val_only); gfx_drawstr(unit_str);
+
+  gfx_r = 0.2; gfx_g = 0.75; gfx_b = 1.0; gfx_a = 1.0;
+  gfx_x = text_start_x; gfx_y = text_start_y;
+  gfx_drawstr(#val_only); gfx_drawstr(unit_str);  
+  
+  mouse_x >= f_x && mouse_x <= f_x+f_w && mouse_y >= f_y && mouse_y <= f_y+f_h ? want_hand_cursor = 1;
+);
+
+// ---- ЛОГИКА ОБРАБОТКИ МЫШКИ (С ДВОЙНЫМ КЛИКОМ) ----
+mouse_cap == 1 ? (
+  active_knob == 0 ? (
+    // Клик по тумблеру MONO
+    mouse_x >= sw_x && mouse_x <= sw_x+sw_w && mouse_y >= sw_y && mouse_y <= sw_y+sw_h ? (
+      slider5 = !slider5;
+      _update_audio_params();
+      sliderchange(slider5);
+      active_knob = -1; 
+    );
+    
+    active_knob == 0 ? (
+      dist1 = sqrt((mouse_x - k1_x)^2 + (mouse_y - k_y)^2);
+      dist2 = sqrt((mouse_x - k2_x)^2 + (mouse_y - k_y)^2);
+      dist3 = sqrt((mouse_x - k3_x)^2 + (mouse_y - k_y)^2);
+      dist4 = sqrt((mouse_x - k4_x)^2 + (mouse_y - k_y)^2);
+      
+      dist1 < k_rad + 6 ? clicked_knob = 1;
+      dist2 < k_rad + 6 ? clicked_knob = 2;
+      dist3 < k_rad + 6 ? clicked_knob = 3;
+      dist4 < k_rad + 6 ? clicked_knob = 4;
+      
+      clicked_knob > 0 ? (
+        current_time = time_precise();
+        // Если кликнули по тому же кнобу в интервале менее 0.25 секунд — это ДВОЙНОЙ КЛИК
+        (clicked_knob == last_click_knob && (current_time - last_click_time) < 0.25) ? (
+          clicked_knob == 1 ? slider1 = 50;  // Дефолт Питча
+          clicked_knob == 2 ? slider2 = 50;  // Дефолт Хааса
+          clicked_knob == 3 ? slider3 = 0;   // Дефолт Центра
+          clicked_knob == 4 ? slider4 = -3;  // Дефолт Сайда
+          
+          _update_audio_params();
+          sliderchange(1 << (clicked_knob - 1));
+          active_knob = -1; // Блокируем драг после сброса
+        ) : (
+          // Обычный зажим для кручения
+          active_knob = clicked_knob;
+          last_mouse_y = mouse_y;
+        );
+        
+        last_click_time = current_time;
+        last_click_knob = clicked_knob;
+      );
+    );
+  );
+  
+  active_knob > 0 ? (
+    delta_y = last_mouse_y - mouse_y; 
+    last_mouse_y = mouse_y;
+    
+    active_knob == 1 ? slider1 = min(max(slider1 + delta_y * 0.5, 0), 100);
+    active_knob == 2 ? slider2 = min(max(slider2 + delta_y * 0.5, 0), 100);
+    active_knob == 3 ? slider3 = min(max(slider3 + delta_y * 0.1, -6), 6);
+    active_knob == 4 ? slider4 = min(max(slider4 + delta_y * 0.1, -12), 6);
+    
+    _update_audio_params();
+    sliderchange(1 << (active_knob - 1));
+  );
+) : (
+  active_knob = 0; 
+  clicked_knob = 0;
+);
+
+// Отрисовка модулей
+draw_knob(k1_x, k_y, k_rad, slider1, 0, 100, "Pitch Detune", " %");
+draw_knob(k2_x, k_y, k_rad, slider2, 0, 100, "Haas Delay", " %");
+draw_knob(k3_x, k_y, k_rad, slider3, -6, 6,  "Center Level", " dB");
+draw_knob(k4_x, k_y, k_rad, slider4, -12, 6, "Side Level", " dB");
+gfx_cursor = want_hand_cursor ? 5 : 0;
+// Футер
+gfx_r = 0.62; gfx_g = 0.65; gfx_b = 0.70;
+gfx_setfont(1, "Arial", 10);
+gfx_x = 16; gfx_y = 214;
+gfx_drawstr("v2.0 | by mkdirwave");
